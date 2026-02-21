@@ -28,7 +28,7 @@ def fetch_repo_files(repo_name):
         elif file_content.type == "dir":
             contents.extend(repo.get_contents(file_content.path))
     
-    return files
+    return files, repo.description
 
 # Extract code snippets from the files
 def extract_code_snippets(files):
@@ -38,6 +38,18 @@ def extract_code_snippets(files):
             content = file.decoded_content.decode("utf-8")
             code_snippets.append(content[:5000])  # Limit snippet size to avoid token overflow
     return code_snippets
+
+def extract_code_data(files):
+    """Extracts code and pairs it with the filename for better context."""
+    code_data = []
+    for file in files:
+        if file.name.endswith((".py", ".js", ".java", ".jsx", ".json", ".c", ".go", ".ipynb")):
+            content = file.decoded_content.decode("utf-8")
+            code_data.append({
+                "filename": file.name,
+                "content": content[:5000] # Limit to avoid token overflow
+            })
+    return code_data
 
 # Extract function names using regex (customize for different languages)
 def extract_function_names(code):
@@ -80,6 +92,31 @@ def generate_code_graph(code_snippets):
     
     return nodes, edges
 
+def generate_architectural_graph(code_data):
+    """Generates a graph mapping Files -> Functions."""
+    nodes = []
+    edges = []
+    added_nodes = set()
+    
+    for file_data in code_data:
+        filename = file_data["filename"]
+        functions = extract_function_names(file_data["content"])
+        
+        # Add File Node
+        if filename not in added_nodes:
+            nodes.append(Node(id=filename, label=filename, size=25, shape="hexagon", color="#FF4B4B"))
+            added_nodes.add(filename)
+            
+        # Add Function Nodes and link them to the File
+        for func in functions:
+            func_id = f"{filename}_{func}" # Unique ID to prevent cross-file conflicts
+            if func_id not in added_nodes:
+                nodes.append(Node(id=func_id, label=func, size=15, shape="dot", color="#4B8BFF"))
+                added_nodes.add(func_id)
+                edges.append(Edge(source=filename, target=func_id, color="#FFFFFF"))
+                
+    return nodes, edges
+
 # Function to fetch repo details and commit data
 def fetch_repo_details(repo_name):
     repo = github.get_repo(repo_name)
@@ -96,96 +133,55 @@ def fetch_repo_details(repo_name):
         "code_snippets": code_snippets  # Including code snippets
     }
 
-# Plot commit activity
-import pandas as pd
-import streamlit as st
-import plotly.graph_objects as go
-
-def plot_commit_dates(commit_dates):
-    # Convert commit dates to pandas datetime format
-    dates = pd.to_datetime(commit_dates)
-    
-    # Count the number of commits per day
-    counts = dates.value_counts().sort_index()
-    
-    # Prepare data for the plot
-    days = counts.index.strftime('%Y-%m-%d').to_list()  # Format dates as strings
-    commits_per_day = counts.values.tolist()
-
-    # Create a bar plot using Plotly
-    fig = go.Figure()
-
-    # Add bar trace for commits per day
-    fig.add_trace(go.Bar(
-        x=days,
-        y=commits_per_day,
-        name="Commits",
-        marker_color='blue'
-    ))
-
-    # Update layout to improve appearance
-    fig.update_layout(
-        title="Commit Activity Over Time",
-        xaxis_title="Date",
-        yaxis_title="Number of Commits",
-        showlegend=False,
-        xaxis_tickangle=45,
-        barmode='group'
-    )
-
-    # Display the plot in Streamlit
-    st.plotly_chart(fig, use_container_width=True)
-
-# Streamlit UI
-st.title("GitHub Repository Summarizer")
-repo_name = st.text_input("Enter the GitHub Repository (owner/repo):")
+# --- Streamlit UI ---
+st.set_page_config(layout="wide")
+st.title("GitHub Repository Deep-Dive Summarizer")
+repo_name = st.text_input("Enter the GitHub Repository (owner/repo):", placeholder="e.g., streamlit/streamlit")
 
 if repo_name:
-    with st.spinner("Fetching repository details..."):
+    with st.spinner("Analyzing repository architecture and executing deep dive..."):
         try:
-            # Fetch repo details and extract code snippets
-            files = fetch_repo_files(repo_name)
-            code_snippets = extract_code_snippets(files)  # Extract code snippets from files
-            ai_description = generate_ai_description_with_gemini(code_snippets)  # AI-generated description
-            details = fetch_repo_details(repo_name)  # Get repo details including commits
+            # 1. Fetch files and basic info
+            files, description = fetch_repo_files(repo_name)
             
-            # Displaying repository details
-            st.write(f"### Repository: {details['name']}")
-            st.write(f"**Total Commits:** {details['commit_count']}")
-            
-            # Visualize code snippets graph
-            st.write("### Code Snippets Graph")
-            nodes, edges = generate_code_graph(code_snippets)  # Generate graph from code snippets
-            
-            # Define the configuration for rendering the graph
-            config = Config(
-                        width=750,
-                        height=950,
-                        directed=True,
-                        physics=True,
-                        hierarchical=False,
-                        nodes={
-                            "font": {
-                                "color": "white"  # Set node font color to white
-                            }
-                        },
-                        edges={
-                            "font": {
-                                "color": "white"  # Set edge font color to white
-                            }
-                        }
-                    )
+            # 2. Extract code paired with filenames
+            code_data = extract_code_data(files)
 
+            compiled_code = "\n".join([f"--- FILE: {d['filename']} ---\n{d['content']}\n" for d in code_data])
             
-            # Display the graph in Streamlit
-            agraph(nodes=nodes, edges=edges, config=config)
+            # 3. Generate Architectural Graph
+            nodes, edges = generate_architectural_graph(code_data)
             
-            st.write("### Code Description")
-            st.write(f"{details['ai_description']}")
+            # Make sure your gemini.py function accepts this prompt string!
+            ai_deep_dive = generate_ai_description_with_gemini(compiled_code) 
             
-            # Commit activity graph
-            st.write("### Commit Activity")
-            plot_commit_dates(details['commit_dates'])
+            # --- Rendering ---
+            st.write(f"### Repository: {repo_name}")
+            if description:
+                st.write(f"_{description}_")
+                
+            st.markdown("---")
+            
+            col1, col2 = st.columns([1, 1.5])
+            
+            with col1:
+                st.write("### File Architecture Graph")
+                st.caption("Red Hexagons = Files | Blue Dots = Functions extracted from that file")
+                
+                config = Config(
+                    width="100%",
+                    height=700,
+                    directed=True,
+                    physics=True,
+                    hierarchical=False,
+                    nodeHighlightBehavior=True,
+                    highlightColor="#F7A7A6"
+                )
+                agraph(nodes=nodes, edges=edges, config=config)
+                
+            with col2:
+                st.write("### Step-by-Step Execution & Analysis")
+                st.write(ai_deep_dive)
             
             
             
