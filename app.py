@@ -1,16 +1,12 @@
 import os
 import re
 import streamlit as st
-from dotenv import load_dotenv
 from github import Github
 from streamlit_agraph import agraph, Node, Edge, Config
 from gemini import generate_ai_description_with_gemini
 import pandas as pd
 import plotly.figure_factory as ff
 import matplotlib.pyplot as plt
-
-# Load environment variables
-load_dotenv()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 github = Github(GITHUB_TOKEN)
